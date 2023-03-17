@@ -17,10 +17,10 @@ def correlate_kernels(volumes, kernels, mode="valid", remove_input_depth_dimensi
     assert len(volumes.shape) == len(kernels.shape)
     if mode == "valid":
         x = np.empty((kernels.shape[0], volumes.shape[0],
-                       *(volumes.shape[i] - kernels.shape[i] + 1 for i in range(1, len(volumes.shape)))))
+                      *(volumes.shape[i] - kernels.shape[i] + 1 for i in range(1, len(volumes.shape)))))
     elif mode == "full":
         x = np.empty((kernels.shape[0], volumes.shape[0],
-                       *(volumes.shape[i] + kernels.shape[i] - 1 for i in range(1, len(volumes.shape)))))
+                      *(volumes.shape[i] + kernels.shape[i] - 1 for i in range(1, len(volumes.shape)))))
     else:
         raise Exception(f"mode {mode} is not a valid mode for cross-correlation (valid modes are 'valid' & 'full')")
 
@@ -55,7 +55,7 @@ def correlate_kernels_loop(volumes, kernels, mode="valid", remove_input_depth_di
     """volumes = images"""
     assert len(volumes.shape) == len(kernels.shape)
     x = np.empty((volumes.shape[0], kernels.shape[0],
-                       *(volumes.shape[i] - kernels.shape[i] + 1 for i in range(1, len(volumes.shape)))))
+                  *(volumes.shape[i] - kernels.shape[i] + 1 for i in range(1, len(volumes.shape)))))
 
     for i in range(volumes.shape[0]):
         for j in range(kernels.shape[0]):
@@ -86,7 +86,7 @@ def concat(*tensors, axis=0):
 
 def pool(data, sizes, criterion, criterion_included):
     out = np.empty((data.shape[0], data.shape[1], *(dim // sizes[i] for i, dim in enumerate(data.shape[2:]))))
-    out_grad = []  #np.zeros(data.shape)
+    out_grad = []  # np.zeros(data.shape)
 
     def _f(subarr):
         ret = np.zeros(subarr.shape)
@@ -107,7 +107,7 @@ def pool(data, sizes, criterion, criterion_included):
                 subarrays = new_subarrays
             res = np.array([criterion(subarr) for subarr in subarrays])
             for subarr in subarrays:
-                out_grad.append(_f(subarr))  #included.reshape(data.shape[2:])
+                out_grad.append(_f(subarr))  # included.reshape(data.shape[2:])
             out[i, j] = res.reshape([dim // sizes[i] for i, dim in enumerate(data.shape[2:])])
     return out, np.array(out_grad)
 
