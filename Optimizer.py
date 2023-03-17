@@ -20,7 +20,7 @@ class Default:
 	
 	def step(self, lr, x):
 		if self.tensor.requires_grad:
-			self.tensor.data -= lr * self.gradient
+			self.tensor.data -= lr * self.gradient[x]
 
 
 class Adam:

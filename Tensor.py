@@ -329,6 +329,8 @@ class Tensor:
         # x = upstream
         if self.logging:
             print(f"backward @ {self.name}")
+        if self.transforms.get(x) is None:
+            self.transforms[x] = []
         for transform, others in reversed(self.transforms[x]):
             gradient = transform(gradient)
             for other in others:

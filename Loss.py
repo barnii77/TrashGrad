@@ -8,22 +8,22 @@ class Loss:
 	error: float
 
 	def backward(self, lr=None, zero_grad=False):
-		self.y.backward(self.prime)
+		self.y.backward(self.prime, None)
 		if lr is not None:
-			self.y.optimize(lr)
+			self.optimize(lr)
 			if zero_grad:
-				self.y.zero_grad()
+				self.zero_grad()
 
 	def optimize(self, lr=.01):
-		self.y.optimize(lr)
+		self.y.optimize(None, lr)
 
 	def zero_grad(self):
-		self.y.zero_grad()
+		self.y.zero_grad(None)
 
 
 class MSE(Loss):
 	def __init__(self, y: Tensor, ystar, requires_error=False):  # super.__init__() doesnt do anything
-		self.name = "MSE Loss"
+		self.name = "Mean Squared Error"
 		self.y = y
 		self.error = 0.0
 		if isinstance(ystar, Tensor):
