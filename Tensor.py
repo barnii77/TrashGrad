@@ -7,17 +7,18 @@ from Optimizer import Default as DefaultOptim
 
 
 class Tensor:
-    def __init__(self, data: np.ndarray, parents=tuple(), requires_grad=False, Optim=None,
+    def __init__(self, data: np.ndarray, parents=tuple(), requires_grad=False, trainable=False, Optim=None,
                  logging=False, name="Tensor", dynamic=True):
         """Optim is pointer to class Adam etc"""
-        self.requires_grad = requires_grad
+        self.requires_grad = requires_grad or trainable
+        self.trainable = trainable
         self.data = data
         self.downstreams = parents
         self.transforms = {}
         # contains a sequence of transforms like transposes etc to be performed on the gradient + branches of the graph
         # to be backpropagated through with the temporal gradient. .backward will go through the reversed list of ops.
         # finally, the first branch in the list will be the parents of the tensor so you do backprop on them too.
-        if Optim is not None and requires_grad:
+        if Optim is not None:
             self.optim = Optim(self)
         else:
             self.optim = DefaultOptim(self)
@@ -26,7 +27,9 @@ class Tensor:
         self.dynamic = dynamic  # if set to True, the tensor will, if possible, overwrite it's own value instead of making a new tensor
 
     def __mul__(self, other):
-        x = Tensor(self.data * other.data, (self, other), logging=self.logging, requires_grad=any(map(lambda p: p.requires_grad, self.downstreams)))
+        x = Tensor(self.data * other.data, (self, other), logging=self.logging or other.logging,
+                   requires_grad=self.requires_grad or other.requires_grad,
+                   dynamic=self.dynamic or other.dynamic)
 
         self._add_transform(lambda grad: grad * other.data, x)
         other._add_transform(lambda grad: grad * self.data, x)
@@ -35,21 +38,25 @@ class Tensor:
 
     def __matmul__(self, other):
         # dotaxes = axes in which dot product is computed
-        x = Tensor(self.data @ other.data, (self, other), logging=self.logging, requires_grad=any(map(lambda p: p.requires_grad, self.downstreams)))
+        x = Tensor(self.data @ other.data, (self, other), logging=self.logging or other.logging,
+                   requires_grad=self.requires_grad or other.requires_grad,
+                   dynamic=self.dynamic or other.dynamic)
 
         self._add_transform(lambda grad: grad @ np.transpose(other.data, axes=(
-                *range(len(other.data.shape) - 2), len(other.data.shape) - 1, len(other.data.shape) - 2)), x)
+            *range(len(other.data.shape) - 2), len(other.data.shape) - 1, len(other.data.shape) - 2)), x)
         other._add_transform(lambda grad: np.transpose(self.data, axes=(
-                *range(len(self.data.shape) - 2), len(self.data.shape) - 1, len(self.data.shape) - 2)) @ grad, x)
+            *range(len(self.data.shape) - 2), len(self.data.shape) - 1, len(self.data.shape) - 2)) @ grad, x)
 
         return x
 
     def __add__(self, other):
-        if self.dynamic:
+        if self.dynamic and self.downstreams:
             self.data += other.data
             x = self
         else:
-            x = Tensor(self.data + other.data, (self, other), logging=self.logging, requires_grad=any(map(lambda p: p.requires_grad, self.downstreams)))
+            x = Tensor(self.data + other.data, (self, other), logging=self.logging or other.logging,
+                       requires_grad=self.requires_grad or other.requires_grad,
+                       dynamic=self.dynamic or other.dynamic)
 
         self._add_transform(lambda grad: grad, x, (other,) if self.dynamic else tuple())
         other._add_transform(lambda grad: grad, x)
@@ -57,11 +64,13 @@ class Tensor:
         return x
 
     def __sub__(self, other):
-        if self.dynamic:
+        if self.dynamic and self.downstreams:
             self.data -= other.data
             x = self
         else:
-            x = Tensor(self.data - other.data, (self, other), logging=self.logging, requires_grad=any(map(lambda p: p.requires_grad, self.downstreams)))
+            x = Tensor(self.data - other.data, (self, other), logging=self.logging or other.logging,
+                       requires_grad=self.requires_grad or other.requires_grad,
+                       dynamic=self.dynamic or other.dynamic)
 
         self._add_transform(lambda grad: grad, x, (other,) if self.dynamic else tuple())
         other._add_transform(lambda grad: -grad, x)
@@ -69,18 +78,22 @@ class Tensor:
         return x
 
     def __pow__(self, power, modulo=None):
-        x = Tensor(self.data ** power, (self,), logging=self.logging, requires_grad=any(map(lambda p: p.requires_grad, self.downstreams)))
+        x = Tensor(self.data ** power, (self,), logging=self.logging,
+                   requires_grad=self.requires_grad,
+                   dynamic=self.dynamic)
 
         self._add_transform(lambda grad: grad * power * self.data ** (power - 1), x)
 
         return x
 
     def __neg__(self):
-        if self.dynamic:
+        if self.dynamic and self.downstreams:
             self.data = -self.data
             x = self
         else:
-            x = Tensor(-self.data, (self,), logging=self.logging, requires_grad=any(map(lambda p: p.requires_grad, self.downstreams)))
+            x = Tensor(-self.data, (self,), logging=self.logging,
+                       requires_grad=self.requires_grad,
+                       dynamic=self.dynamic)
 
         self._add_transform(lambda grad: -grad, x)
 
@@ -109,18 +122,20 @@ class Tensor:
         return -self
 
     def transpose(self, axes):
-        if self.dynamic:
+        if self.dynamic and self.downstreams:
             self.data = self.data.transpose(axes)
             x = self
         else:
-            x = Tensor(self.data.transpose(axes), (self,), logging=self.logging, requires_grad=any(map(lambda p: p.requires_grad, self.downstreams)))
+            x = Tensor(self.data.transpose(axes), (self,), logging=self.logging,
+                       requires_grad=self.requires_grad,
+                       dynamic=self.dynamic)
 
         self._add_transform(lambda grad: grad.transpose(axes), x)
 
         return x
 
     def relu(self, alpha=.02):
-        if self.dynamic:
+        if self.dynamic and self.downstreams:
             self.data[self.data < 0] *= alpha
             x = self
 
@@ -128,7 +143,9 @@ class Tensor:
                 grad[self.data < 0] *= alpha
                 return grad
         else:
-            x = Tensor(np.copy(self.data), (self,), logging=self.logging, requires_grad=any(map(lambda p: p.requires_grad, self.downstreams)))
+            x = Tensor(np.copy(self.data), (self,), logging=self.logging,
+                       requires_grad=self.requires_grad,
+                       dynamic=self.dynamic)
             x.data[x.data < 0] *= alpha
 
             def _f(grad):
@@ -140,11 +157,13 @@ class Tensor:
         return x
 
     def tanh(self):
-        if self.dynamic:
+        if self.dynamic and self.downstreams:
             self.data = np.tanh(self.data)
             x = self
         else:
-            x = Tensor(np.tanh(self.data), (self,), logging=self.logging, requires_grad=any(map(lambda p: p.requires_grad, self.downstreams)))
+            x = Tensor(np.tanh(self.data), (self,), logging=self.logging,
+                       requires_grad=self.requires_grad,
+                       dynamic=self.dynamic)
 
         self._add_transform(lambda grad: grad * (1 - x.data ** 2), x)
         # 1 - np.tanh(self.data) ** 2
@@ -152,11 +171,13 @@ class Tensor:
         return x
 
     def sigmoid(self):
-        if self.dynamic:
+        if self.dynamic and self.downstreams:
             self.data = 1 / (1 + np.exp(-self.data))
             x = self
         else:
-            x = Tensor(1 / (1 + np.exp(-self.data)), (self,), logging=self.logging, requires_grad=any(map(lambda p: p.requires_grad, self.downstreams)))
+            x = Tensor(1 / (1 + np.exp(-self.data)), (self,), logging=self.logging,
+                       requires_grad=self.requires_grad,
+                       dynamic=self.dynamic)
 
         self._add_transform(lambda grad: grad * x.data * (1 - x.data), x)
 
@@ -164,11 +185,13 @@ class Tensor:
 
     def softmax(self):
         x = np.exp(self.data)
-        if self.dynamic:
-            self.data = x
+        if self.dynamic and self.downstreams:
+            self.data = x / x.sum()
             x = self
         else:
-            x = Tensor(x / x.sum(), (self,), logging=self.logging, requires_grad=any(map(lambda p: p.requires_grad, self.downstreams)))
+            x = Tensor(x / x.sum(), (self,), logging=self.logging,
+                       requires_grad=self.requires_grad,
+                       dynamic=self.dynamic)
 
         def _f(grad):
             M = x.data @ np.ones((*x.data.shape[:-2], x.data.shape[-1], x.data.shape[-2]))
@@ -180,29 +203,35 @@ class Tensor:
         return x
 
     def exp(self):
-        if self.dynamic:
+        if self.dynamic and self.downstreams:
             self.data = np.exp(self.data)
             x = self
         else:
-            x = Tensor(np.exp(self.data), (self,), logging=self.logging, requires_grad=any(map(lambda p: p.requires_grad, self.downstreams)))
+            x = Tensor(np.exp(self.data), (self,), logging=self.logging,
+                       requires_grad=self.requires_grad,
+                       dynamic=self.dynamic)
 
         self._add_transform(lambda grad: x.data * grad, x)
 
         return x
 
     def log(self):
-        x = Tensor(np.log(self.data), (self,), logging=self.logging, requires_grad=any(map(lambda p: p.requires_grad, self.downstreams)))
+        x = Tensor(np.log(self.data), (self,), logging=self.logging,
+                   requires_grad=self.requires_grad,
+                   dynamic=self.dynamic)
 
         self._add_transform(lambda grad: grad * (1 / self.data), x)
 
         return x
 
     def reshape(self, shape):
-        if self.dynamic:
+        if self.dynamic and self.downstreams:
             self.data = self.data.reshape(shape)
             x = self
         else:
-            x = Tensor(self.data.reshape(shape), (self,), logging=self.logging, requires_grad=any(map(lambda p: p.requires_grad, self.downstreams)))
+            x = Tensor(self.data.reshape(shape), (self,), logging=self.logging,
+                       requires_grad=self.requires_grad,
+                       dynamic=self.dynamic)
 
         self._add_transform(lambda grad: grad.reshape(self.data.shape), x)
 
@@ -213,7 +242,9 @@ class Tensor:
 
     def correlate(self, kernels):
         x = f.correlate_kernels(self.data, kernels.data)
-        x = Tensor(x, (self, kernels), logging=self.logging, requires_grad=any(map(lambda p: p.requires_grad, self.downstreams)))
+        x = Tensor(x, (self, kernels), logging=self.logging,
+                   requires_grad=self.requires_grad,
+                   dynamic=self.dynamic)
 
         self._add_transform(lambda grad: f.convolve_equal_depth_loop(grad, kernels.data), x)
         kernels._add_transform(lambda grad: f.correlate_batches(self.data, grad), x)
@@ -223,11 +254,14 @@ class Tensor:
     def concat(self, *others, axis=0):
         tensors = (self, *others)
         assert (len(tensors[i - 1].shape) == len(tensors[i].shape) for i in range(len(tensors)))
-        x = Tensor(np.concatenate([t.data for t in tensors], axis=axis), tensors, logging=self.logging, requires_grad=any(map(lambda p: p.requires_grad, self.downstreams)))
+        x = Tensor(np.concatenate([t.data for t in tensors], axis=axis), tensors, logging=self.logging,
+                   requires_grad=any(map(lambda p: p.requires_grad, tensors)),
+                   dynamic=any(map(lambda p: p.dynamic, tensors)))
 
         start_of_self = 0
         for t in tensors:
-            t._add_transform(lambda grad: np.split([start_of_self, start_of_self + t.data.shape[axis]], axis=axis)[1], x)
+            t._add_transform(lambda grad: np.split([start_of_self, start_of_self + t.data.shape[axis]], axis=axis)[1],
+                             x)
             start_of_self += t.data.shape[axis]
 
         return x
@@ -253,16 +287,20 @@ class Tensor:
         assert 0 <= rate < 1
         if magnitude_correction:
             dropout_tensor = Tensor(np.random.choice((0, 1), self.data.shape, p=(rate, 1 - rate)) / (1 - rate),
-                                    logging=self.logging, requires_grad=any(map(lambda p: p.requires_grad, self.downstreams)))
+                                    logging=self.logging,
+                                    dynamic=self.dynamic)
         else:
             dropout_tensor = Tensor(np.random.choice((0, 1), self.data.shape, p=(rate, 1 - rate)),
-                                    logging=self.logging, requires_grad=any(map(lambda p: p.requires_grad, self.downstreams)))
+                                    logging=self.logging,
+                                    dynamic=self.dynamic)
         return self * dropout_tensor
 
     def pool(self, sizes, criterion, criterion_included, poolfunc=f.pool):
         """size: pool size; criterion: np.max | np.min | np.average ... pointer; criterion included: np.argmax | np.argmin | lambda x: x ... pointer"""
         x, included = poolfunc(self.data, sizes, criterion, criterion_included)
-        x = Tensor(x, (self,), logging=self.logging, requires_grad=any(map(lambda p: p.requires_grad, self.downstreams)))
+        x = Tensor(x, (self,), logging=self.logging,
+                   requires_grad=self.requires_grad,
+                   dynamic=self.dynamic)
 
         self._add_transform(lambda grad: (grad.flatten() * included).reshape(self.data.shape), x)
 
@@ -280,7 +318,7 @@ class Tensor:
     def batchnorm(self):
         inv_batchsums = np.apply_along_axis(lambda a: 1 / a.sum(), 0, self.data)
 
-        if self.dynamic:
+        if self.dynamic and self.downstreams:
             self.data *= inv_batchsums
             x = self.data
         else:
@@ -293,7 +331,7 @@ class Tensor:
     def euclid_batchnorm(self):
         batchdivs = np.apply_along_axis(lambda a: 1 / np.sqrt((a * a).sum()))
 
-        if self.dynamic:
+        if self.dynamic and self.downstreams:
             self.data *= batchdivs
             x = self
         else:
@@ -306,8 +344,8 @@ class Tensor:
     def _add_transform(self, function, x, others=tuple()):
         """add a function of the gradient to the transforms that will be applied to it in the backward pass"""
         # x = upstream
-        if not isinstance(others, tuple):
-            others = tuple(others)
+        # if not isinstance(others, tuple):
+        # others = tuple(others)
         self.downstreams += others
         if self.transforms.get(x) is None:
             self.transforms[x] = []
@@ -334,9 +372,10 @@ class Tensor:
         for transform, others in reversed(self.transforms[x]):
             gradient = transform(gradient)
             for other in others:
-                other.backward(gradient, self)
-
-        self.optim.update(gradient.sum(axis=0, keepdims=True) / gradient.shape[0], x)
+                if other.requires_grad:
+                    other.backward(gradient, self)
+        if self.trainable:
+            self.optim.update(gradient.sum(axis=0, keepdims=True) / gradient.shape[0], x)
         for downstream in self.downstreams:
             if downstream.requires_grad:
                 downstream.backward(gradient, self)
@@ -345,7 +384,8 @@ class Tensor:
         # x = upstream
         if self.logging:
             print(f"optimize @ {self.name}")
-        self.optim.step(lr, x)
+        if self.trainable:
+            self.optim.step(lr, x)
         for downstream in self.downstreams:
             if downstream.requires_grad:
                 downstream.optimize(self, lr)
