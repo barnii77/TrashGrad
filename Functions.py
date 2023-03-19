@@ -74,7 +74,7 @@ def convolve_equal_depth_loop(volumes, kernels, mode="full"):
 
     for i in range(volumes.shape[0]):  # for sample in batch
         for j in range(kernels.shape[1]):  # for layer in image_depth
-            for k in range(kernels.shape[0]):  # gradient.shape[1] == kernels.shape[0] == depth
+            for k in range(kernels.shape[0]):  # for kernel in kernels (gradient.shape[1] == kernels.shape[0] == depth)
                 x[i, j] += signal.convolve(volumes[i, k], kernels[k, j], mode)
 
     return x
@@ -129,3 +129,13 @@ def averagepool(data, sizes, *_):
                 out_grad.append(np.ones(subarr.shape))  # included.reshape(data.shape[2:])
             out[i, j] = res.reshape([dim // sizes[i] for i, dim in enumerate(data.shape[2:])])
     return out, np.array(out_grad)
+
+
+def add(*tensors):
+    # because i can
+    return tensors[0].addall(tensors[1:])
+
+
+def multiply(*tensors):
+    # because i can
+    return tensors[0].mulall(tensors[1:])

@@ -12,4 +12,4 @@ class Dense:
 		return self.w @ x + self.b
 
 	def __repr__(self):
-		return self.w.__repr__() + "\n\n" + self.b.__repr__()
+		return "Dense"  # self.w.__repr__() + "\n\n" + self.b.__repr__()

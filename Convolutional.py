@@ -12,4 +12,4 @@ class Convolutional2D:
         return x.correlate(self.k) + self.b
 
     def __repr__(self):
-        return self.k.__repr__() + "\n\n" + self.b.__repr__()
+        return "Convolutional"  # self.k.__repr__() + "\n\n" + self.b.__repr__()

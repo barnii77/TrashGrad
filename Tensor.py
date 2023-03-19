@@ -99,6 +99,17 @@ class Tensor:
 
         return x
 
+    def __truediv__(self, other):
+        inv = 1 / other.data
+        x = Tensor(self.data * inv, (self, other), logging=self.logging,
+                   requires_grad=self.requires_grad,
+                   dynamic=self.dynamic)
+
+        self._add_transform(lambda grad: grad * inv, x, (other,))
+        other._add_transform(lambda grad: -grad * self.data * (inv * inv))
+
+        return x
+
     def __repr__(self):
         sep = '      \n'
         return f"Tensor{sep.join(self.data.__repr__()[5:].splitlines())}"
@@ -120,6 +131,31 @@ class Tensor:
 
     def neg(self):
         return -self
+
+    def div(self, other):
+        return self / other
+
+    def addall(self, *others):
+        tensors = (self, *others)
+        x = Tensor(sum(map(lambda a: a.data, tensors)), tensors, logging=any(map(lambda a: a.logging, tensors)),
+                   requires_grad=any(map(lambda a: a.requires_grad, tensors)),
+                   dynamic=any(map(lambda a: a.dynamic, tensors)))
+
+        for t in tensors:
+            t._add_transform(lambda grad: grad, x)
+
+        return x
+
+    def mulall(self, *others):
+        tensors = (self, *others)
+        x = Tensor(np.prod(map(lambda a: a.data, tensors)), tensors, logging=any(map(lambda a: a.logging, tensors)),
+                   requires_grad=any(map(lambda a: a.requires_grad, tensors)),
+                   dynamic=any(map(lambda a: a.dynamic, tensors)))
+
+        for t in tensors:
+            t._add_transform(lambda grad: np.prod([tensor.data for tensor in tensors if tensor != t]), x)
+
+        return x
 
     def transpose(self, axes):
         if self.dynamic and self.downstreams:
