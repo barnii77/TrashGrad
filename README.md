@@ -7,4 +7,5 @@ encorporate the local derivative. The keys are simply the result the operation y
 the same time. Dont use it. It's garbage.
 
 # Derivation of _f(grad) in Tensor.batchnorm()
-![Hope its correct lol](https://www.github.com/barnii77/TrashGrad/derivation.jpeg)
+Sorry for the bad editing, this is the original sheet I tried to derive it on myself. I removed a few things.
+![](derivation.jpeg)
