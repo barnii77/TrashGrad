@@ -8,4 +8,6 @@ the same time. Dont use it. It's garbage.
 
 # Derivation of _f(grad) in Tensor.batchnorm()
 Sorry for the bad editing, this is the original sheet I tried to derive it on myself. I removed a few things.
+
+dir = abs'(g) forgot to add that
 ![](derivation.jpeg)
