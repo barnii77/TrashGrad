@@ -5,3 +5,6 @@ somewhat reasonable implementation and speed it up. Right now, I just defined a 
 and the derivative of this operation with respect to whatever contributes to it will be set automatically as lambda functions in a dictionary that 
 encorporate the local derivative. The keys are simply the result the operation yielded, so you could in theory use a Tensor in multiple threads at
 the same time. Dont use it. It's garbage.
+
+# Derivation of _f(grad) in Tensor.batchnorm()
+![Hope its correct lol](https://www.github.com/barnii77/TrashGrad/derivation.jpeg)
