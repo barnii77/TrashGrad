@@ -1,7 +1,7 @@
 import numpy as np
 
 
-class Default:
+class SGD:
 	def __init__(self, tensor):
 		self.gradient = {}
 		self.tensor = tensor

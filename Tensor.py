@@ -3,17 +3,17 @@ import math
 import numpy as np
 
 import Functions as f
-from Optimizer import Default as DefaultOptim
+from Optimizer import SGD
 
 
 class Tensor:
-    def __init__(self, data: np.ndarray, parents=tuple(), requires_grad=False, trainable=False, Optim=None,
+    def __init__(self, data: np.ndarray, downstreams=tuple(), requires_grad=False, trainable=False, Optim=None,
                  logging=False, name="Tensor", dynamic=True):
         """Optim is pointer to class Adam etc"""
         self.requires_grad = requires_grad or trainable
         self.trainable = trainable
         self.data = data
-        self.downstreams = parents
+        self.downstreams = downstreams
         self.transforms = {}
         # contains a sequence of transforms like transposes etc to be performed on the gradient + branches of the graph
         # to be backpropagated through with the temporal gradient. .backward will go through the reversed list of ops.
@@ -21,7 +21,7 @@ class Tensor:
         if Optim is not None:
             self.optim = Optim(self)
         else:
-            self.optim = DefaultOptim(self)
+            self.optim = SGD(self)
         self.logging = logging
         self.name = name
         self.dynamic = dynamic  # if set to True, the tensor will, if possible, overwrite it's own value instead of making a new tensor
@@ -102,11 +102,29 @@ class Tensor:
     def __truediv__(self, other):
         inv = 1 / other.data
         x = Tensor(self.data * inv, (self, other), logging=self.logging,
-                   requires_grad=self.requires_grad,
+                   requires_grad=self.requires_grad or other.requires_grad,
                    dynamic=self.dynamic)
 
         self._add_transform(lambda grad: grad * inv, x, (other,))
         other._add_transform(lambda grad: -grad * self.data * (inv * inv))
+
+        return x
+
+    def __abs__(self):
+        abs_prime = np.ones(self.data.shape)
+        abs_prime[self.data < 0] = -1.0
+
+        if self.dynamic and self.downstreams:
+            self.data = np.abs(self.data)
+            x = self
+        else:
+            x = Tensor(np.abs(self.data), (self,), logging=self.logging,
+                       requires_grad=self.requires_grad,
+                       dynamic=self.dynamic)
+
+        self._add_transform(lambda grad: grad * abs_prime, x)  # alternatively you could define a different function
+        # for the case self.dynamic == False which computes 'abs_prime' during the backward pass instead of storing it
+        # in memory until then
 
         return x
 
@@ -115,25 +133,76 @@ class Tensor:
         return f"Tensor{sep.join(self.data.__repr__()[5:].splitlines())}"
 
     def mul(self, other):
-        return self * other
+        if isinstance(other, Tensor):
+            if other.requires_grad or not self.dynamic:
+                return self * other
+
+        if self.dynamic:
+            self.data *= other
+            x = self
+        else:
+            x = Tensor(self.data * other, (self,), logging=self.logging,
+                       requires_grad=self.requires_grad,
+                       dynamic=self.dynamic)
+
+        self._add_transform(lambda grad: grad * other, x)
+
+        return x
 
     def matmul(self, other):
         return self @ other
 
-    def add(self, other):
-        return self + other
+    def add(self, other, new_tensor=False):
+        if self.dynamic and new_tensor:
+            self.dynamic = False
+            x = self + other
+            self.dynamic = True
+        else:
+            x = self + other
+        return x
 
-    def sub(self, other):
-        return self - other
+    def sub(self, other, new_tensor=False):
+        if self.dynamic and new_tensor:
+            self.dynamic = False
+            x = self - other
+            self.dynamic = True
+        else:
+            x = self - other
+        return x
 
     def pow(self, power, modulo=None):
         return self ** power
 
-    def neg(self):
-        return -self
+    def neg(self, new_tensor=False):
+        if self.dynamic and new_tensor:
+            self.dynamic = False
+            x = -self
+            self.dynamic = True
+        else:
+            x = -self
+        return x
 
     def div(self, other):
-        return self / other
+        if isinstance(other, Tensor):
+            if other.requires_grad or not self.dynamic:
+                return self / other
+
+        inv = 1 / other
+
+        if self.dynamic:
+            self.data *= inv
+            x = self
+        else:
+            x = Tensor(self.data * inv, (self,), logging=self.logging,
+                       requires_grad=self.requires_grad,
+                       dynamic=self.dynamic)
+
+        self._add_transform(lambda grad: grad * inv, x)
+
+        return x
+
+    def abs(self):
+        return abs(self)
 
     def addall(self, *others):
         tensors = (self, *others)
@@ -222,10 +291,10 @@ class Tensor:
     def softmax(self):
         x = np.exp(self.data)
         if self.dynamic and self.downstreams:
-            self.data = x / x.sum()
+            self.data = np.apply_along_axis(lambda a: a / a.sum(), 0, x)
             x = self
         else:
-            x = Tensor(x / x.sum(), (self,), logging=self.logging,
+            x = Tensor(np.apply_along_axis(lambda a: a / a.sum(), 0, x), (self,), logging=self.logging,
                        requires_grad=self.requires_grad,
                        dynamic=self.dynamic)
 
@@ -238,8 +307,8 @@ class Tensor:
 
         return x
 
-    def exp(self):
-        if self.dynamic and self.downstreams:
+    def exp(self, new_tensor=False):
+        if self.dynamic and self.downstreams and not new_tensor:
             self.data = np.exp(self.data)
             x = self
         else:
@@ -257,6 +326,37 @@ class Tensor:
                    dynamic=self.dynamic)
 
         self._add_transform(lambda grad: grad * (1 / self.data), x)
+
+        return x
+
+    def sum(self, new_tensor=False):
+        shape = self.data.shape
+
+        if self.dynamic and not new_tensor:
+            self.data = np.array([np.sum(self.data)])
+            x = self
+        else:
+            x = Tensor(np.array([np.sum(self.data)]), (self,), logging=self.logging,
+                       requires_grad=self.requires_grad,
+                       dynamic=self.dynamic)
+
+        self._add_transform(lambda grad: grad * np.ones(shape), x)
+
+        return x
+
+    def mean(self, new_tensor=False):
+        shape = self.data.shape
+        size = self.data.size
+
+        if self.dynamic and not new_tensor:
+            self.data = np.array([np.mean(self.data)])
+            x = self
+        else:
+            x = Tensor(np.array([np.mean(self.data)]), (self,), logging=self.logging,
+                       requires_grad=self.requires_grad,
+                       dynamic=self.dynamic)
+
+        self._add_transform(lambda grad: (grad / size) * np.ones(shape), x)
 
         return x
 
@@ -314,7 +414,7 @@ class Tensor:
         a.gradf = {y: lambda grad: grad @ b.data}
         z.gradf = {}
         (operations performed on this tensor)"""
-        return Tensor(self.data.copy(), self.downstreams, self.requires_grad, logging=self.logging)
+        return Tensor(self.data.copy(), self.downstreams, self.requires_grad, logging=self.logging, trainable=self.trainable, Optim=self.optim.__class__, name=self.name, dynamic=self.dynamic)
 
     def copydata(self):
         return self.data.copy()
@@ -352,7 +452,7 @@ class Tensor:
         return self.pool(sizes, np.average, lambda x: range(x.size), poolfunc=f.averagepool)
 
     def batchnorm(self):
-        inv_batchsums = np.apply_along_axis(lambda a: 1 / a.sum(), 0, self.data)
+        """inv_batchsums = np.apply_along_axis(lambda a: 1 / a.sum(), 0, self.data)
 
         if self.dynamic and self.downstreams:
             self.data *= inv_batchsums
@@ -361,6 +461,41 @@ class Tensor:
             x = Tensor(self.data * inv_batchsums, (self,), logging=self.logging)
 
         self._add_transform(lambda grad: grad * inv_batchsums, x)
+
+        return x"""
+        # looks very confusing I know
+        # derivation in the readme.md
+        # hope it's correct lol
+        ma_g_x = []  # mean(abs(g(x)))
+        g_x = []  # g(x)
+
+        def _f(grad):
+            """this cannot be parallelized within a tensor so not the best implementation probably. might try (again) to
+            use numba to jit-compile it but didn't work last time I tried."""
+            # compute derivative array of abs(x)
+            abs_prime = np.empty(grad.shape)
+            abs_prime[g_x[0] < 0] = -1 / grad.size
+            abs_prime[g_x[0] >= 0] = 1 / grad.size
+            # compute updated gradient (derivation in readme.md)
+            grad = (1 - 1 / grad.size) * (ma_g_x[0] - g_x[0] * abs_prime[0]) / ma_g_x[0] ** 2  # note: grad.size = g_x[0].size
+            ma_g_x.pop(0)  # -> when _f(grad) is called for the grad of the next
+            g_x.pop(0)
+            return grad
+
+        def _g(ary):
+            # apply g(x); note: ary = x in notes
+            ary -= np.mean(ary)
+            # save value
+            g_x.append(ary)
+            # compute mean(abs(x))
+            meanabs = np.mean(np.abs(ary))
+            # save the mean(abs(x)) since it's expensive to compute but only a float to store
+            ma_g_x.append(meanabs)
+            return ary / meanabs
+
+        x = Tensor(np.apply_along_axis(_g, 0, self.data))
+
+        self._add_transform(lambda grad: np.apply_along_axis(_f, 0, grad), x)
 
         return x
 
