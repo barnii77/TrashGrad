@@ -1,4 +1,5 @@
 import math
+import warnings
 
 import numpy as np
 
@@ -127,6 +128,12 @@ class Tensor:
         # in memory until then
 
         return x
+
+    def __getitem__(self, item):
+        return self.data[item]
+
+    def __setitem__(self, key, value):
+        self.data[key] = value
 
     def __repr__(self):
         sep = '      \n'
@@ -414,7 +421,8 @@ class Tensor:
         a.gradf = {y: lambda grad: grad @ b.data}
         z.gradf = {}
         (operations performed on this tensor)"""
-        return Tensor(self.data.copy(), self.downstreams, self.requires_grad, logging=self.logging, trainable=self.trainable, Optim=self.optim.__class__, name=self.name, dynamic=self.dynamic)
+        return Tensor(self.data.copy(), self.downstreams, self.requires_grad, logging=self.logging,
+                      trainable=self.trainable, Optim=self.optim.__class__, name=self.name, dynamic=self.dynamic)
 
     def copydata(self):
         return self.data.copy()
@@ -477,7 +485,8 @@ class Tensor:
             abs_prime[g_x[0] < 0] = -1 / grad.size
             abs_prime[g_x[0] >= 0] = 1 / grad.size
             # compute updated gradient (derivation in readme.md)
-            grad = (1 - 1 / grad.size) * (ma_g_x[0] - g_x[0] * abs_prime[0]) / ma_g_x[0] ** 2  # note: grad.size = g_x[0].size
+            grad *= (1 - 1 / grad.size) * (ma_g_x[0] - g_x[0] * abs_prime[0]) / ma_g_x[
+                0] ** 2  # note: grad.size = g_x[0].size
             ma_g_x.pop(0)  # -> when _f(grad) is called for the grad of the next
             g_x.pop(0)
             return grad
@@ -493,7 +502,9 @@ class Tensor:
             ma_g_x.append(meanabs)
             return ary / meanabs
 
-        x = Tensor(np.apply_along_axis(_g, 0, self.data))
+        x = Tensor(np.apply_along_axis(_g, 0, self.data), (self,), logging=self.logging,
+                   requires_grad=self.requires_grad,
+                   dynamic=self.dynamic)
 
         self._add_transform(lambda grad: np.apply_along_axis(_f, 0, grad), x)
 
@@ -506,9 +517,27 @@ class Tensor:
             self.data *= batchdivs
             x = self
         else:
-            x = Tensor(self.data * batchdivs, (self,), logging=self.logging)
+            x = Tensor(self.data * batchdivs, (self,), logging=self.logging,
+                       requires_grad=self.requires_grad,
+                       dynamic=self.dynamic)
 
         self._add_transform(lambda grad: grad * batchdivs, x)
+
+        return x
+
+    def _apply(self, func, func_prime=None, new_tensor=True):
+        if func_prime is None:
+            func_prime = lambda grad: 0
+            warnings.warn(f"{self.name}._apply({func}, {None}, {new_tensor}) called without func_prime given. func_prime's default value of lambda grad: 0 used. This will stop gradient flow.")
+        if new_tensor or not self.dynamic:
+            x = Tensor(func(self.data), (self,), logging=self.logging,
+                       requires_grad=self.requires_grad,
+                       dynamic=self.dynamic)
+        else:
+            self.data = func(self.data)
+            x = self
+
+        self._add_transform(func_prime, x)
 
         return x
 
