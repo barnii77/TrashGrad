@@ -4,16 +4,6 @@ from scipy import signal
 
 def correlate_kernels(volumes, kernels, mode="valid", remove_input_depth_dimension=True):
     """volumes = images"""
-    '''# make sure kernel shape matches img shape
-    # if kernel has additional dimensions of size 1, they'll be removed.
-    i = 0
-    while len(img.shape) + 1 < len(kernels.shape):
-        if kernels.shape[i - 1] == 1:
-            i -= 1
-        else:
-            raise Exception(f"Kernel of shape {kernels.shape} does not match image of shape {img.shape}")
-    if i < 0:
-        kernels = kernels.reshape(kernels.shape[:i])'''
     assert len(volumes.shape) == len(kernels.shape)
     if mode == "valid":
         x = np.empty((kernels.shape[0], volumes.shape[0],
@@ -129,13 +119,3 @@ def averagepool(data, sizes, *_):
                 out_grad.append(np.ones(subarr.shape))  # included.reshape(data.shape[2:])
             out[i, j] = res.reshape([dim // sizes[i] for i, dim in enumerate(data.shape[2:])])
     return out, np.array(out_grad)
-
-
-def add(*tensors):
-    # because i can
-    return tensors[0].addall(tensors[1:])
-
-
-def multiply(*tensors):
-    # because i can
-    return tensors[0].mulall(tensors[1:])

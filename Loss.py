@@ -1,4 +1,5 @@
 import numpy as np
+import cupy as cp
 from Tensor import Tensor
 
 
@@ -6,6 +7,7 @@ class Loss:
 	y: Tensor
 	prime: float
 	error: float
+	name: str
 
 	def backward(self, lr=None, zero_grad=False):
 		self.y.backward(self.prime, None)
@@ -30,7 +32,7 @@ class MSE(Loss):
 			if requires_error:
 				self.error = ((y.data - ystar.data) ** 2).sum()
 			self.prime = y.data - ystar.data
-		elif isinstance(ystar, np.ndarray):
+		elif isinstance(ystar, np.ndarray) or isinstance(ystar, cp.ndarray):
 			if requires_error:
 				self.error = ((y.data - ystar) ** 2).sum()
 			self.prime = y.data - ystar
@@ -45,11 +47,11 @@ class CrossEntropyLoss(Loss):
 		self.error = 0.0
 		if isinstance(ystar, Tensor):
 			if requires_error:
-				self.error = (-ystar.data * np.log(y.data)).sum()
+				self.error = (-ystar.data * y.lib.log(y.data)).sum()
 			self.prime = -ystar.data * (1 / y.data)
-		elif isinstance(ystar, np.ndarray):
+		elif isinstance(ystar, np.ndarray) or isinstance(ystar, cp.ndarray):
 			if requires_error:
-				self.error = (-ystar * np.log(y.data)).sum()
+				self.error = (-ystar * y.lib.log(y.data)).sum()
 			self.prime = -ystar * (1 / y.data)
 		else:
 			raise Exception(f"Exception @ {self}: ystar needs to be Tensor or ndarray, not {type(ystar)}")
