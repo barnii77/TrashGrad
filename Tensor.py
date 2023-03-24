@@ -3,9 +3,11 @@ import warnings
 
 import numpy as np
 import cupy as cp
+import cusignal
 
-import CPUFunctions as cpu_f
-import GPUFunctions as gpu_f
+from scipy import signal
+
+import Functions as f
 from Optimizer import SGD
 
 
@@ -39,10 +41,10 @@ class Tensor:
 
         if mode == "gpu":
             self.lib = cp
-            self.funclib = gpu_f
+            self.siglib = cusignal
         else:
             self.lib = np
-            self.funclib = cpu_f
+            self.siglib = signal
 
     def __del__(self):
         for downstream in self.downstreams:
@@ -513,7 +515,7 @@ class Tensor:
         return self.reshape((self.data.shape[0], math.prod(self.data.shape[1:]), 1))
 
     def correlate(self, kernels):
-        x = self.funclib.correlate_kernels(self.data, kernels.data)
+        x = f.correlate_kernels(self.data, kernels.data)
         assert self.mode == kernels.mode
         x = Tensor(x,
                    (self, kernels),
@@ -522,8 +524,8 @@ class Tensor:
                    dynamic=self.dynamic or kernels.dynamic,
                    mode=self.mode)
 
-        self._add_transform(lambda grad: self.funclib.convolve_equal_depth_loop(grad, kernels.data), x)
-        kernels._add_transform(lambda grad: self.funclib.correlate_batches(self.data, grad), x)
+        self._add_transform(lambda grad: f.convolve_equal_depth_loop(grad, kernels.data), x)
+        kernels._add_transform(lambda grad: f.correlate_batches(self.data, grad), x)
 
         return x
 
@@ -610,8 +612,8 @@ class Tensor:
     def pool(self, sizes, criterion, criterion_included, poolfunc=None):
         """size: pool size; criterion: np.max | np.min | np.average ... pointer; criterion included: np.argmax | np.argmin | lambda x: x ... pointer"""
         if poolfunc is None:
-            poolfunc = self.funclib.pool
-        x, included = poolfunc(self.data, sizes, criterion, criterion_included)
+            poolfunc = f.pool
+        x, included = poolfunc(self.data, sizes, criterion, criterion_included, self.lib)
         x = Tensor(x,
                    (self,),
                    logging=self.logging,
@@ -630,7 +632,7 @@ class Tensor:
         return self.pool(sizes, self.lib.min, self.lib.argmin)
 
     def averagepool(self, sizes):
-        return self.pool(sizes, self.lib.average, lambda x: range(x.size), poolfunc=self.funclib.averagepool)
+        return self.pool(sizes, self.lib.average, lambda x: range(x.size), poolfunc=f.averagepool)
 
     def batchnorm(self):
         """inv_batchsums = np.apply_along_axis(lambda a: 1 / a.sum(), 0, self.data)
