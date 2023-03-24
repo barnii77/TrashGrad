@@ -1,4 +1,4 @@
-# TrashGrad
+# TrashGrad (Don't use it!)
 
 I dont know how to write a readme lol. It's absolute garbage (inefficient af). I might use numba, cupy and cuSignal in the future to make it a
 somewhat reasonable implementation and speed it up. Right now, I just defined a bunch of operations you can do on so-called Tensor objects

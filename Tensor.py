@@ -34,7 +34,7 @@ class Tensor:
             self.optim = SGD(self)
         self.logging = logging
         self.name = name
-        self.dynamic = dynamic  # more memory efficient, but not threadsafe
+        self.dynamic = dynamic  # more memory efficient, but not threadsafe (-> dont use IF multiple threads operate on the same tensor instance)
         self.mode = mode
 
         if mode == "gpu":
@@ -43,6 +43,10 @@ class Tensor:
         else:
             self.lib = np
             self.funclib = cpu_f
+
+    def __del__(self):
+        for downstream in self.downstreams:
+            downstream.zero_grad(self, True, True)
 
     def cpu(self):
         if self.lib is cp:
@@ -288,6 +292,19 @@ class Tensor:
     def abs(self):
         return abs(self)
 
+    def invert(self):
+        x = Tensor(1 / self.data,
+                   (self,),
+                   logging=self.logging,
+                   requires_grad=self.requires_grad,
+                   dynamic=self.dynamic,
+                   mode=self.mode
+                   )
+
+        self._add_transform(lambda grad: grad * (-1 / self.data ** 2), x)
+
+        return x
+
     def addall(self, *others):
         tensors = (self, *others)
         assert all([self.mode == i.mode for i in tensors])
@@ -314,7 +331,7 @@ class Tensor:
                    mode=self.mode)
 
         for t in tensors:
-            t._add_transform(lambda grad: self.lib.prod([tensor.data for tensor in tensors if tensor != t]), x)
+            t._add_transform(lambda grad: grad * self.lib.prod([tensor.data for tensor in tensors if tensor != t]), x)
 
         return x
 
@@ -339,9 +356,6 @@ class Tensor:
             self.data[self.data < 0] *= alpha
             x = self
 
-            def _f(grad):
-                grad[self.data < 0] *= alpha
-                return grad
         else:
             x = Tensor(self.lib.copy(self.data),
                        (self,),
@@ -351,9 +365,9 @@ class Tensor:
                        mode=self.mode)
             x.data[x.data < 0] *= alpha
 
-            def _f(grad):
-                grad[self.data < 0] *= alpha
-                return grad
+        def _f(grad):
+            grad[self.data < 0] *= alpha
+            return grad
 
         self._add_transform(_f, x)
 
@@ -527,7 +541,7 @@ class Tensor:
         start_of_self = 0
         for t in tensors:
             t._add_transform(
-                lambda grad: self.lib.split([start_of_self, start_of_self + t.data.shape[axis]], axis=axis)[1],
+                lambda grad: self.lib.split(grad, [start_of_self, start_of_self + t.data.shape[axis]], axis)[1],
                 x)
             start_of_self += t.data.shape[axis]
 
@@ -535,18 +549,20 @@ class Tensor:
 
     def split(self, indices: tuple, axis=1):
         tensors = [Tensor(j,
-                   (self,),
-                   logging=self.logging,
-                   requires_grad=self.requires_grad,
-                   dynamic=self.dynamic,
-                   mode=self.mode) for j in self.lib.split(self.data, indices, axis)]
+                          (self,),
+                          logging=self.logging,
+                          requires_grad=self.requires_grad,
+                          dynamic=self.dynamic,
+                          mode=self.mode) for j in self.lib.split(self.data, indices, axis)]
 
         start_of_self = 0
         for x in tensors:
             self._add_transform(lambda grad: self.lib.concatenate([
-                self.lib.zeros(x.data.shape[:axis] + (start_of_self,) + x.data.shape[axis+1:]),
+                self.lib.zeros(x.data.shape[:axis] + (start_of_self,) + x.data.shape[axis + 1:]),
                 self.lib.split(grad, (start_of_self, start_of_self + x.data.shape[axis]), axis)[1],
-                self.lib.zeros(x.data.shape[:axis] + (self.data.shape[axis] - start_of_self - x.data.shape[axis],) + x.data.shape[axis+1:])
+                self.lib.zeros(
+                    x.data.shape[:axis] + (self.data.shape[axis] - start_of_self - x.data.shape[axis],) + x.data.shape[
+                                                                                                          axis + 1:])
             ]), x)
             start_of_self += x.data.shape[axis]
 
@@ -738,18 +754,23 @@ class Tensor:
             self.transforms[x] = []
         self.transforms[x].append((function, others))
 
-    def zero_grad(self, x,
-                  delete_graph=True):  # set to True to delete connections between tensors in both directions if not stated otherwise
+    def zero_grad(self, x, delete_gradient=True,
+                  depth=0, max_depth=math.inf):
         # x = upstream
-        if delete_graph:
-            self.transforms[x] = []
         self.optim.zero_grad(x)
 
-        for downstream in self.downstreams:
-            downstream.zero_grad(x, delete_graph)
+        if depth > max_depth or delete_gradient:
+            self.transforms[x] = []
 
-        if delete_graph:
+        transform_keys = set(self.transforms.keys())
+        transform_keys.remove(self)
+
+        for downstream in self.downstreams:
+            downstream.zero_grad(self, not transform_keys, depth + 1, max_depth)
+
+        if not transform_keys:
             self.downstreams = tuple()
+            self.transforms[self] = []  # same as self.transforms = {}
 
     def backward(self, gradient, x, depth=0, max_depth=math.inf):
         # x = upstream
@@ -783,7 +804,7 @@ class Tensor:
 
         for downstream in self.downstreams:  # continue backprop in parents
             if downstream.requires_grad:  # if downstream.requires_grad is False, no tensor in this branch of the graph is trainable (-> no backprop there)
-                downstream.backward(gradient, self, depth+1, max_depth)
+                downstream.backward(gradient, self, depth + 1, max_depth)
 
     def optimize(self, x, lr=0.01, depth=0, max_depth=math.inf):
         # x = upstream
@@ -798,4 +819,4 @@ class Tensor:
 
         for downstream in self.downstreams:
             if downstream.requires_grad:
-                downstream.optimize(self, lr)
+                downstream.optimize(self, lr, depth + 1, max_depth)
