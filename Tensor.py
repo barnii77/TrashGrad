@@ -8,19 +8,20 @@ import cupyx.scipy.signal as cpxsignal
 from scipy import signal
 
 import ConvFunctions as cf
-from Optimizer import StdOptim
 
 
 class Tensor:
-    def __init__(self, data, upstreams=tuple(), requires_grad=False, trainable=False, Optim=None,
+    def __init__(self, data, upstreams=tuple(), requires_grad=False, trainable=False,
                  logging=False, name="Tensor", dynamic=False, mode="cpu"):
         """Warning: dynamic can lead to performance increases (mainly memory) but is not threadsafe"""
-        if dynamic:
-            warnings.warn(f"{name} is dynamic, note that this is not threadsafe")
-        '''if mode == "gpu" and cp.get_array_module(data) is np:
+        if dynamic and trainable:
+            raise Exception(f"Exception in {name}: A trainable tensor cannot be dynamic.")
+        if dynamic and logging:
+            warnings.warn(f"{name} is dynamic, note that this is not 100% threadsafe")
+        if mode == "gpu" and cp.get_array_module(data) is np:
             data = cp.asarray(data)
         elif mode == "cpu" and cp.get_array_module(data) is cp:
-            data = cp.asnumpy(data)'''
+            data = cp.asnumpy(data)
 
         self.requires_grad = requires_grad or trainable
         self.trainable = trainable
@@ -30,10 +31,7 @@ class Tensor:
         # contains a sequence of transforms like transposes etc to be performed on the gradient + branches of the graph
         # to be backpropagated through with the temporal gradient. .backward will go through the reversed list of ops.
         # finally, the first branch in the list will be the parents of the tensor so you do backprop on them too.
-        if Optim is not None:
-            self.optim = Optim(self)
-        else:
-            self.optim = StdOptim(self)
+
         self.logging = logging
         self.name = name
         self.dynamic = dynamic  # more memory efficient, but not threadsafe (-> dont use IF multiple threads operate on the same tensor instance)
@@ -77,14 +75,23 @@ class Tensor:
 
         return x
 
-    def gpu(self):
-        if self.mode == "gpu":
-            x = Tensor(cp.asarray(self.data),
-                       (self,),
-                       logging=self.logging,
-                       requires_grad=self.requires_grad,
-                       dynamic=self.dynamic,
-                       mode="gpu")
+    def gpu(self, device=None):
+        if self.mode == "cpu" or device is not None:
+            if device is not None:
+                with cp.cuda.Device(device):
+                    x = Tensor(cp.asarray(self.data),
+                               (self,),
+                               logging=self.logging,
+                               requires_grad=self.requires_grad,
+                               dynamic=self.dynamic,
+                               mode="gpu")
+            else:
+                x = Tensor(cp.asarray(self.data),
+                           (self,),
+                           logging=self.logging,
+                           requires_grad=self.requires_grad,
+                           dynamic=self.dynamic,
+                           mode="gpu")
 
             self._add_transform(lambda grad: cp.asnumpy(grad), x)
         else:
@@ -349,7 +356,7 @@ class Tensor:
 
         return x
 
-    def transpose(self, axes):
+    def transpose(self, axes: tuple[int]):
         assert max(axes) == len(axes) - 1
         if self.dynamic and self.upstreams and not self.next_op_new_tensor_forced:
             self.data = self.data.transpose(axes)
@@ -646,7 +653,6 @@ class Tensor:
                       self.requires_grad,
                       logging=self.logging,
                       trainable=self.trainable,
-                      Optim=self.optim.__class__,
                       name=self.name,
                       dynamic=self.dynamic,
                       mode=self.mode)
@@ -846,91 +852,37 @@ class Tensor:
             self.transforms[x] = []
         self.transforms[x].append((function, others))
 
-    def zero_grad(self, x=None, delete_gradient=True,
-                  depth=0, max_depth=math.inf):
-        """delete_gradient should be set to False for deep systems like RNNs, but to True for shallow systems (MLPs, ..; basically everything without hidden states)"""
-        # x = upstream
-        if not self.requires_grad:
-            return
+    def _backward(self, gradients: dict):
+        """Uses a dict instead of a tensor.grad field because tensor.grad wouldn't be threadsafe, this is."""
+        for upstream in self.upstreams:  # foreach parent
+            gradient = gradients.get(self)  # get the own gradient from gradient dict (gradients[tensor] = tensor.grad)
+            if gradient is None:  # init the gradient to np.ones|cp.ones if it doesn't exist
+                gradient = self.lib.ones(self.data.shape)
+            if upstream.transforms.get(self) is not None:
+                for transform, others in reversed(upstream.transforms[self]):  # transforms to get from self's gradient to the  grad of the final state of upstream
+                    gradient = transform(gradient)
+                    for other in others:
+                        gradients[other] = gradients.get(other, 0.) + gradient
+            if upstream.transforms.get(upstream) is not None:
+                for transform, others in reversed(upstream.transforms[upstream]):
+                    gradient = transform(gradient)
+                    for other in others:
+                        gradients[other] = gradients.get(other, 0.) + gradient
+            gradients[upstream] = gradients.get(upstream, 0.) + gradient
 
-        if x is None:
-            x = self
+    def backward(self, max_depth=math.inf):
+        topo = []
+        visited = set()
 
-        if self.logging:
-            print(f"zero grad @ {self.name}")
+        def build_topo(node, depth=0):
+            if node not in visited and depth < max_depth:
+                visited.add(node)
+                for upstream in node.upstreams:
+                    build_topo(upstream, depth + 1)
+                topo.append(node)
 
-        self.optim.zero_grad(x)
-
-        if depth > max_depth or delete_gradient:
-            self.transforms[x] = []
-
-        transform_keys = set(self.transforms.keys())
-        transform_keys.remove(self)
-
-        for upstream in self.upstreams:
-            upstream.zero_grad(self, not transform_keys, depth + 1, max_depth)
-
-        if not transform_keys:
-            self.upstreams = tuple()
-            self.transforms[self] = []  # same as self.transforms = {}
-
-    # todo: implement topo
-    def backward(self, gradient=None, x=None, depth=0, max_depth=math.inf):
-        # x = upstream
-        # note: there are no checks if tensor.requires_grad because if it is false, it isn't connected to the graph
-        if depth > max_depth:
-            return
-
-        if x is None:
-            x = self
-
-        if gradient is None:
-            gradient = self.lib.ones(self.data.shape)
-
-        if self.logging:
-            print(f"backward @ {self.name}")
-
-        # commented out because .dynamify() could trigger this
-        '''if not self.dynamic and self.transforms.get(self):
-            warnings.warn(
-                f"{self.name}: self.dynamic is False (-> threadsafe), but nevertheless, non-threadsafe methods were found")'''
-
-        if x != self:
-            if self.transforms.get(x) is None:
-                self.transforms[x] = []
-
-            for transform, others in reversed(self.transforms[x]):  # update gradients
-                gradient = transform(gradient)
-                for other in others:
-                    other.backward(gradient, self)
-
-        if self.transforms.get(self) is None:
-            self.transforms[self] = []
-
-        for transform, others in reversed(self.transforms[self]):  # only possible if self.dynamic is True
-            gradient = transform(gradient)
-            for other in others:
-                other.backward(gradient, self)
-
-        if self.trainable:
-            self.optim.update(gradient.sum(axis=0, keepdims=True) / gradient.shape[0], x)  # average gradient in batch samples
-
-        for upstream in self.upstreams:  # continue backprop in parents
-            upstream.backward(gradient, self, depth + 1, max_depth)
-
-    def optimize(self, x=None, lr=0.01, depth=0, max_depth=math.inf):
-        # x = upstream
-        if depth > max_depth:
-            return
-
-        if x is None:
-            x = self
-
-        if self.logging:
-            print(f"optimize @ {self.name}")
-
-        if self.trainable:
-            self.optim.step(lr, x)
-
-        for upstream in self.upstreams:
-            upstream.optimize(self, lr, depth + 1, max_depth)
+        build_topo(self)
+        gradients = {}
+        for node in reversed(topo):
+            node._backward(gradients)
+        return gradients
