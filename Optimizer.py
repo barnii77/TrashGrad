@@ -1,4 +1,5 @@
-class SGD:
+class StdOptim:
+	"""This is simply gradient descend without momentum"""
 	def __init__(self, tensor):
 		self.gradient = {}
 		self.tensor = tensor
@@ -20,8 +21,30 @@ class SGD:
 			self.tensor.data -= lr * self.gradient[x]
 
 
+class SGD:
+	"""Gradient descend with momentum"""
+	def __init__(self, tensor, beta=.5):
+		self.gradient = 0
+		self.beta = beta
+		self.tensor = tensor
+
+	def zero_grad(self, x=None):
+		pass
+
+	def reset(self):
+		self.gradient = 0
+
+	def update(self, gradient, x):
+		if self.tensor.requires_grad:
+			self.gradient = gradient + self.beta * self.gradient
+
+	def step(self, lr, x):
+		if self.tensor.requires_grad:
+			self.tensor.data -= lr * self.gradient
+
+
 class Adam:
-	def __init__(self, tensor, beta1=.9, beta2=.9):
+	def __init__(self, tensor, beta1=.5, beta2=.5):
 		self.tensor = tensor
 		self.beta1 = beta1
 		self.beta2 = beta2

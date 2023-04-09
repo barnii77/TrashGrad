@@ -1,5 +1,5 @@
 import numpy as np
-import cupy as cp
+# import cupy as cp
 from Tensor import Tensor
 
 
@@ -17,7 +17,7 @@ class Loss:
 				self.zero_grad()
 
 	def optimize(self, lr=.01):
-		self.y.optimize(None, lr)
+		self.y.optimize(lr=lr)
 
 	def zero_grad(self):
 		self.y.zero_grad(None)
@@ -32,7 +32,8 @@ class MSE(Loss):
 			if requires_error:
 				self.error = ((y.data - ystar.data) ** 2).sum()
 			self.prime = y.data - ystar.data
-		elif isinstance(ystar, np.ndarray) or isinstance(ystar, cp.ndarray):
+			''' or isinstance(ystar, cp.ndarray)'''
+		elif isinstance(ystar, np.ndarray):
 			if requires_error:
 				self.error = ((y.data - ystar) ** 2).sum()
 			self.prime = y.data - ystar
@@ -49,7 +50,8 @@ class CrossEntropyLoss(Loss):
 			if requires_error:
 				self.error = (-ystar.data * y.lib.log(y.data)).sum()
 			self.prime = -ystar.data * (1 / y.data)
-		elif isinstance(ystar, np.ndarray) or isinstance(ystar, cp.ndarray):
+			''' or isinstance(ystar, cp.ndarray)'''
+		elif isinstance(ystar, np.ndarray):
 			if requires_error:
 				self.error = (-ystar * y.lib.log(y.data)).sum()
 			self.prime = -ystar * (1 / y.data)
