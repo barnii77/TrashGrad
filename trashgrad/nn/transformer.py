@@ -115,6 +115,8 @@ class PostLNEncoderLayer(tg.Module):
         self.drop_prob = drop_prob
         self.multi_head_attention = MultiHeadAttention(d_model, num_heads)
         self.feed_forward = feed_forward
+        self.LN1 = tg.LayerNorm(d_model)  # todo: add a mode to transformer module
+        self.LN2 = tg.LayerNorm(d_model)
 
     def forward(self, prompt: tg.Tensor, padding_mask: tg.Tensor = None):
         if padding_mask is not None:
@@ -122,9 +124,10 @@ class PostLNEncoderLayer(tg.Module):
                 padding_mask = padding_mask.reshape(
                     (padding_mask.shape[0],) + tuple(1 for _ in range(prompt.ndim - padding_mask.ndim)) + (
                         padding_mask.shape[1],))
-        residual = tg.standardize(
-            prompt + tg.dropout(self.multi_head_attention(prompt, mask=padding_mask), self.drop_prob))
-        return tg.standardize(residual + tg.dropout(self.feed_forward(residual), self.drop_prob))
+        residual = self.LN1(
+            prompt + tg.dropout(self.multi_head_attention(prompt, mask=padding_mask), self.drop_prob)
+        )
+        return self.LN2(residual + tg.dropout(self.feed_forward(residual), self.drop_prob))
 
 
 class PostLNEncoder(tg.Module):
